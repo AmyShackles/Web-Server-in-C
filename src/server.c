@@ -97,25 +97,25 @@ int send_response(int fd, char *header, char *content_type, void *body,
                   int content_length) {
   const int max_response_size = 65536;
   char response[max_response_size];
-  int response_length; // Total length of header plus body
 
   // !!!!  IMPLEMENT ME
-  time_t raw_format;
-  time(&raw_format);
+  time_t rawtime;
+  struct tm *info;
 
-  response_length = sprintf(response,
-                            "%s\n"
-                            "Date: %s"
-                            "Connection: close\n"
-                            "Connection-Length: %d\n"
-                            "Content-Type: %s\n"
-                            "\n"
-                            "%s",
-                            header, asctime(localtime(&raw_format)),
-                            content_length, content_type, body);
+  info = localtime(&rawtime);
 
+  int response_length =
+      sprintf(response,
+              "%s\n"
+              "Date: %s"
+              "Connection: close\n"
+              "Content-Length: %d\n"
+              "Content-Type: %s\n"
+              "\n",
+              header, asctime(info), content_length, content_type);
+  memcpy(response + response_length, body, content_length);
   // Send it all!
-  int rv = send(fd, response, response_length, 0);
+  int rv = send(fd, response, response_length + content_length, 0);
 
   if (rv < 0) {
     perror("send");
@@ -150,25 +150,13 @@ void resp_404(int fd) {
 }
 
 /**
- * Send a / endpoint response
- */
-void get_root(int fd) {
-  // !!!! IMPLEMENT ME
-  // send_response(...
-  // send_response(fd, "HTTP/1.1 200 OK", "text/html",
-  //               "<!DOCTYPE html><html><head><title>Hello, "
-  //               "World!</title></head><body><center><h1>Hello, "
-  //               "World!</h1></center></body></html></>");
-}
-
-/**
  * Send a /d20 endpoint response
  */
 void get_d20(int fd) {
   // !!!! IMPLEMENT ME
-  srand(time(NULL));
+  srand(time(NULL) + getpid());
 
-  char str[4];
+  char str[8];
 
   int random = rand() % 20 + 1;
   int length = sprintf(str, "%d\n", random);
@@ -179,15 +167,16 @@ void get_d20(int fd) {
 /**
  * Send a /date endpoint response
  */
-void get_date(int fd) {
-  // !!!! IMPLEMENT ME
-  time_t gmt_format;
-  time(&gmt_format);
-  char current[26]; // gmtime documentation stated that a user-supplied buffer
-                    // should have at least 26 bytes.
-  int length = sprintf(current, "%s", asctime(gmtime(&gmt_format)));
-  send_response(fd, "HTTP/1.1 200 OK", "text/plain", current, length);
-}
+// void get_date(int fd) {
+//   // !!!! IMPLEMENT ME
+//   time_t gmt_format;
+//   time(&gmt_format);
+//   char current[26]; // gmtime documentation stated that a user-supplied
+//   buffer
+//                     // should have at least 26 bytes.
+//   int length = sprintf(current, "%s", asctime(gmtime(&gmt_format)));
+//   send_response(fd, "HTTP/1.1 200 OK", "text/plain", current, length);
+// }
 
 /**
  * Post /save endpoint data
@@ -197,9 +186,6 @@ void post_save(int fd, char *body) {
 
   // !!!! IMPLEMENT ME
   int file = open("data.txt", O_CREAT | O_WRONLY | O_APPEND, 0644);
-
-  char buffer[1024];
-  int size = sprintf(buffer, "%s", body);
 
   // lseek(file, SEEK_SET, SEEK_DATA);
 
@@ -212,9 +198,9 @@ void post_save(int fd, char *body) {
     status = "failed";
   } else {
     flock(file, LOCK_EX);
-    write(file, body, size);
-    close(file);
+    write(file, body, strlen(body));
     flock(file, LOCK_UN);
+    close(file);
     status = "ok";
   }
 
@@ -226,35 +212,52 @@ void post_save(int fd, char *body) {
   // Save the body and send a response
 }
 
-void get_file(int fd) {
-  char filepath[4096];
-
+int get_file_or_cache(int fd, struct cache *cache, char *filepath) {
   struct file_data *filedata;
+  struct cache_entry *cacheent;
   char *mime_type;
 
-  //     // Try to find the file
-  snprintf(filepath, sizeof(filepath), "%s/index.html", SERVER_ROOT);
+  cacheent = cache_get(cache, filepath);
 
-  filedata = file_load(filepath);
-
-  if (filedata == NULL) {
-    //         // Handle the case where user just typed in `/` as the path
-    //         // Serve the index.html page
-    snprintf(filepath, sizeof filepath, "%s/index.html", SERVER_ROOT);
+  if (cacheent != NULL) {
+    send_response(fd, "HTTP/1.1 200 OK", cacheent->content_type,
+                  cacheent->content, cacheent->content_length);
+  } else {
     filedata = file_load(filepath);
-
     if (filedata == NULL) {
+      return -1;
+    }
+
+    mime_type = mime_type_get(filepath);
+    send_response(fd, "HTTP/1.1 200 OK", mime_type, filedata->data,
+                  filedata->size);
+
+    cache_put(cache, filepath, mime_type, filedata->data, filedata->size);
+
+    file_free(filedata);
+  }
+
+  return 0;
+}
+
+void get_file(int fd, struct cache *cache, char *request_path) {
+  char filepath[4096];
+  int status;
+
+  //     // Try to find the file
+  snprintf(filepath, sizeof filepath, "%s%s", SERVER_ROOT, request_path);
+  status = get_file_or_cache(fd, cache, filepath);
+
+  if (status == -1) {
+    snprintf(filepath, sizeof filepath, "%s%s/index.html", SERVER_ROOT,
+             request_path);
+    status = get_file_or_cache(fd, cache, filepath);
+
+    if (status == -1) {
       resp_404(fd);
       return;
     }
   }
-
-  mime_type = mime_type_get(filepath);
-
-  send_response(fd, "HTTP/1.1 200 OK", mime_type, filedata->data,
-                filedata->size);
-
-  file_free(filedata);
 }
 
 /**
@@ -271,9 +274,7 @@ char *find_start_of_body(char *header) {
 
   if ((start = strstr(header, "\r\n\r\n")) != NULL) {
     return start + 2;
-  }
-
-  else if ((start = strstr(header, "\n\n")) != NULL) {
+  } else if ((start = strstr(header, "\n\n")) != NULL) {
     return start + 2;
   } else if ((start = strstr(header, "\r\r")) != NULL) {
     return start + 2;
@@ -304,29 +305,24 @@ void handle_http_request(int fd, struct cache *cache) {
   // NUL terminate request string
   request[bytes_recvd] = '\0';
 
+  p = find_start_of_body(request);
+
+  char *body = p + 1;
   // !!!! IMPLEMENT ME
   // Get the request type and path from the first line
   // Hint: sscanf()!
   sscanf(request, "%s %s %s", request_type, request_path, request_protocol);
-  printf("Request: %s %s %s From: %d\n", request_type, request_path,
-         request_protocol, getpid());
+  printf("Request: %s %s %s\n", request_type, request_path, request_protocol);
 
   // !!!! IMPLEMENT ME (stretch goal)
-
-  p = find_start_of_body(request);
-  char *body = p + 1;
 
   // !!!! IMPLEMENT ME
   // call the appropriate handler functions, above, with the incoming data
   if (strcmp(request_type, "GET") == 0) {
-    if (strcmp(request_path, "/") == 0) {
-      get_file(fd);
-    } else if (strcmp(request_path, "/d20") == 0) {
+    if (strcmp(request_path, "/d20") == 0) {
       get_d20(fd);
-    } else if (strcmp(request_path, "/date") == 0) {
-      get_date(fd);
     } else {
-      resp_404(fd);
+      get_file(fd, cache, request_path);
     }
   } else if (strcmp(request_type, "POST") == 0) {
     if (strcmp(request_path, "/save") == 0) {
@@ -334,15 +330,18 @@ void handle_http_request(int fd, struct cache *cache) {
     } else {
       resp_404(fd);
     }
+  } else {
+    fprintf(stderr, "Unknown request type \"%s\"\n", request_type);
+    return;
   }
 }
-
+char *get_in_addr(const struct sockaddr *sa, char *s, size_t maxlen);
 /**
  * Main
  */
 int main(void) {
-  int newfd; // listen on sock_fd, new connection on newfd
-  struct sockaddr_storage their_addr; // connector's address information
+  int newfd;                  // listen on sock_fd, new connection on newfd
+  struct sockaddr their_addr; // connector's address information
   char s[INET6_ADDRSTRLEN];
 
   // Start reaping child processes
@@ -376,31 +375,15 @@ int main(void) {
     }
 
     // Print out a message that we got the connection
-    inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr),
-              s, sizeof s);
+    get_in_addr(((struct sockaddr *)&their_addr), s, sizeof s);
     printf("server: got connection from %s\n", s);
 
     // newfd is a new socket descriptor for the new connection.
     // listenfd is still listening for new connections.
 
     handle_http_request(newfd, cache);
-    // // !!!! IMPLEMENT ME (stretch goal)
-    // // Convert this to be multiprocessed with fork()
-    // int rc = fork();
-    // //  printf("The process that handled this was %d\n", getpid());
-    // if (rc < 0) {
-    //   fprintf(stderr, "Fork failed\n");
-    //   close(newfd);
-    // } else if (rc == 0) {
-    //   handle_http_request(newfd, cache);
-    //   printf("Child process: %d\n", getpid());
-    //   exit(1);
-    // } else {
-    //   wait(NULL);
-    //   printf("Parent process: %d\n", getpid());
+
     close(newfd);
-    // continue;
-    // }
   }
 
   // Unreachable code

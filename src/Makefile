@@ -10,7 +10,7 @@ server: $(OBJS)
 
 net.o: net.c net.h
 
-server.o: server.c net.h
+server.o: server.c
 
 file.o: file.c file.h
 

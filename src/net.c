@@ -8,19 +8,26 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define BACKLOG 10
+#define BACKLOG 10 // how many pending connections queue will hold
 
 /**
  * This gets an Internet address, either IPv4 or IPv6
  *
  * Helper function to make printing easier.
  */
-void *get_in_addr(struct sockaddr *sa) {
-  if (sa->sa_family == AF_INET) {
-    return &(((struct sockaddr_in *)sa)->sin_addr);
+char *get_in_addr(const struct sockaddr *sa, char *s, size_t maxlen) {
+  switch (sa->sa_family) {
+  case AF_INET:
+    inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr), s, maxlen);
+    break;
+  case AF_INET6:
+    inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr), s, maxlen);
+    break;
+  default:
+    strncpy(s, "Unknown AF", maxlen);
+    return NULL;
   }
-
-  return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+  return s;
 }
 
 /**
@@ -69,23 +76,9 @@ int get_listener_socket(char *port) {
       return -2;
     }
 
-    /* OLD WAY OF BINDING WOULD BE LIKE:
-    int sockfd;
-    struct sockaddr_in my_addr;
-
-    sockfd = socket(PF_INET, SOCK_STREAM, 0);
-    my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(MYPORT);
-    my_addr.sin_addr.s_addr = inet_addr(INADDR_ANY);
-
-    memset(my_addr.sin_zero, '\0', sizeof my_addr.sin_zero);
-
-    bind(sockfd, (struct sockaddr *) &my_addr, sizeof my_addr);
-
     // See if we can bind this socket to this local IP address. This
     // associates the file descriptor (the socket descriptor) that
     // we will read and write on with a specific IP address.
-    */
     if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
       close(sockfd);
       // perror("server: bind");
