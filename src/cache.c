@@ -7,16 +7,28 @@
 /* Allocate a cache entry */
 struct cache_entry *alloc_entry(char *path, char *content_type, void *content,
                                 int content_length) {
-  //////////////////
-  // IMPLEMENT ME //
-  //////////////////
+  struct cache_entry *ce = malloc(sizeof *ce);
+
+  ce->path = malloc(strlen(path) + 1);
+  strcpy(ce->path, path);
+
+  ce->content_type = malloc(strlen(content_type) + 1);
+  strcpy(ce->content_type, content_type);
+
+  ce->content_length = content_length;
+
+  ce->content = malloc(content_length);
+  memcpy(ce->content, content, content_length);
+
+  return ce;
 }
 
 /* Deallocate a cache entry */
 void free_entry(struct cache_entry *entry) {
-  //////////////////
-  // IMPLEMENT ME //
-  //////////////////
+  free(entry->content_type);
+  free(entry->content);
+  free(entry->path);
+  free(entry);
 }
 
 /* Insert a cache entry at the head of a linked list */
@@ -66,15 +78,29 @@ struct cache_entry *dllist_remove_tail(struct cache *cache) {
   return oldtail;
 }
 
+/* Clean LRU entries if the cache is oversized */
+void clean_lru(struct cache *cache) {
+  while (cache->cur_size > cache->max_size) {
+    struct cache_entry *oldtail = dllist_remove_tail(cache);
+
+    hashtable_delete(cache->index, oldtail->path);
+    free_entry(oldtail);
+  }
+}
+
 /* Create a new cache
  *
  * max_size: maximum number of entries in the cache
  * hashsize: hashtable size (0 for default)
  */
 struct cache *cache_create(int max_size, int hashsize) {
-  //////////////////
-  // IMPLEMENT ME //
-  //////////////////
+  struct cache *cache = malloc(sizeof *cache);
+  cache->head = cache->tail = NULL;
+  cache->index = hashtable_create(hashsize, NULL);
+  cache->max_size = max_size;
+  cache->cur_size = 0;
+
+  return cache;
 }
 
 void cache_free(struct cache *cache) {
@@ -97,14 +123,32 @@ void cache_free(struct cache *cache) {
  */
 void cache_put(struct cache *cache, char *path, char *content_type,
                void *content, int content_length) {
-  ///////////////////
-  // IMPLEMENT ME //
-  //////////////////
+  struct cache_entry *ce =
+      alloc_entry(path, content_type, content, content_length);
+
+  dllist_insert_head(cache, ce);
+  hashtable_put(cache->index, path, ce);
+  cache->cur_size++;
+
+  clean_lru(cache);
 }
 
 /* Retrieve an entry from the cache */
 struct cache_entry *cache_get(struct cache *cache, char *path) {
-  //////////////////
-  // IMPLEMENT ME //
-  //////////////////
+  struct cache_entry *ce;
+
+  ce = hashtable_get(cache->index, path);
+  if (ce == NULL) {
+    return NULL;
+  }
+
+  dllist_move_to_head(cache, ce);
+
+  return ce;
+}
+
+int cache_remove(struct cache *cache, char *path) {
+  (void)cache;
+  (void)path;
+  return 0;
 }

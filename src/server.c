@@ -241,23 +241,30 @@ int get_file_or_cache(int fd, struct cache *cache, char *filepath) {
 }
 
 void get_file(int fd, struct cache *cache, char *request_path) {
-  char filepath[4096];
-  int status;
+  char filepath[65536];
+  struct file_data *filedata;
+  char *mime_type;
 
   //     // Try to find the file
-  snprintf(filepath, sizeof filepath, "%s%s", SERVER_ROOT, request_path);
-  status = get_file_or_cache(fd, cache, filepath);
+  snprintf(filepath, sizeof(filepath), "%s%s", SERVER_ROOT, request_path);
+  filedata = file_load(filepath);
 
-  if (status == -1) {
+  if (filedata == NULL) {
     snprintf(filepath, sizeof filepath, "%s%s/index.html", SERVER_ROOT,
              request_path);
-    status = get_file_or_cache(fd, cache, filepath);
+    filedata = file_load(filepath);
 
-    if (status == -1) {
+    if (filedata == NULL) {
       resp_404(fd);
       return;
     }
   }
+
+  mime_type = mime_type_get(filepath);
+  send_response(fd, "HTTP/1.1 200 OK", mime_type, filedata->data,
+                filedata->size);
+
+  file_free(filedata);
 }
 
 /**
@@ -340,8 +347,8 @@ char *get_in_addr(const struct sockaddr *sa, char *s, size_t maxlen);
  * Main
  */
 int main(void) {
-  int newfd;                  // listen on sock_fd, new connection on newfd
-  struct sockaddr their_addr; // connector's address information
+  int newfd; // listen on sock_fd, new connection on newfd
+  struct sockaddr_storage their_addr; // connector's address information
   char s[INET6_ADDRSTRLEN];
 
   // Start reaping child processes
